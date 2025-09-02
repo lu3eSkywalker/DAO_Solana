@@ -7,22 +7,12 @@ declare_id!("GeRLoMHnP9YxYG7iSYTp8C55paYcYxE9ioUJSe887XcZ");
 const MAX_DATA_LEN: usize = 100;
 const MAX_APPROVERS: usize = 50;
 
-impl Proposal {
-    pub const LEN: usize = 32 + 4 + MAX_DATA_LEN + 4 + MAX_APPROVERS + 32;
-}
-
 #[program]
 pub mod dao_contract {
     use super::*;
 
-    pub fn create_dao(
-        ctx: Context<CreateDao>, 
-        members: Vec<Pubkey>
-    ) -> Result<()> {
-        require!(
-            members.len() >= 2 as usize,
-            ErrorCode::NotEnoughMembers
-        );
+    pub fn create_dao(ctx: Context<CreateDao>, members: Vec<Pubkey>) -> Result<()> {
+        require!(members.len() >= 2 as usize, ErrorCode::NotEnoughMembers);
 
         let dao = &mut ctx.accounts.daoinfo;
         dao.members = members;
@@ -40,7 +30,10 @@ pub mod dao_contract {
         let proposal = &mut ctx.accounts.proposal;
         let daoinfo = &ctx.accounts.daoinfo;
 
-        require!(daoinfo.members.contains(ctx.accounts.proposer.key), ErrorCode::Unauthorized);
+        require!(
+            daoinfo.members.contains(ctx.accounts.proposer.key),
+            ErrorCode::Unauthorized
+        );
 
         let timeStamp = Clock::get()?.unix_timestamp;
 
@@ -52,6 +45,33 @@ pub mod dao_contract {
         proposal.end_time = timeStamp + 864000;
         proposal.executed = false;
         proposal.options = options;
+
+        Ok(())
+    }
+
+    pub fn vote(ctx: Context<Vote>, option_index: u8) -> Result<()> {
+        let proposal = &mut ctx.accounts.proposal;
+        let daoinfo = &ctx.accounts.daoinfo;
+        let voter = ctx.accounts.voter.key();
+
+        // Make sure the person is a member of the DAO
+        require!(
+            daoinfo.members.contains(&voter),
+            ErrorCode::Unauthorized
+        );
+
+        // Make sure that a member can only vote once
+        require!(
+            !proposal.voters.contains(&voter),
+            ErrorCode::AlreadyVoted
+        );
+
+        // bounds check for option_index
+        let idx = option_index as usize;
+        require!(idx < proposal.options.len(), ErrorCode::InvalidOption);
+
+        proposal.voters.push(voter);
+        proposal.options[idx].vote_count = proposal.options[idx].vote_count.saturating_add(1);
 
         Ok(())
     }
@@ -81,13 +101,28 @@ pub struct CreateProposal<'info> {
     pub proposal: Account<'info, Proposal>,
 
     #[account(mut)]
-    pub proposer: Signer<'info>
+    pub proposer: Signer<'info>,
 
-    #[account]
+    #[account()]
     pub daoinfo: Account<'info, DaoInfo>,
 
     pub system_program: Program<'info, System>,
 }
+
+#[derive(Accounts)]
+pub struct Vote<'info> {
+    #[account(mut)]
+    pub voter: Signer<'info>,
+
+    #[account()]
+    pub daoinfo: Account<'info, DaoInfo>,
+
+    #[account(mut)]
+    pub proposal: Account<'info, Proposal>,
+
+    pub system_program: Program<'info, System>,
+}
+
 
 #[account]
 pub struct Proposal {
@@ -96,9 +131,22 @@ pub struct Proposal {
     pub title: String,
     pub description: String,
     pub options: Vec<ProposalOption>,
+    pub voters: Vec<Pubkey>,
     pub start_time: i64,
     pub end_time: i64,
     pub executed: bool,
+}
+
+impl Proposal {
+    pub const LEN: usize = 32   // dao: Pubkey
+        + 32                   // proposer: Pubkey
+        + 4 + MAX_DATA_LEN     // title: String (4 bytes prefix + bytes)
+        + 4 + MAX_DATA_LEN     // description: String
+        + 4 + (MAX_APPROVERS * (4 + MAX_DATA_LEN)) // options Vec (approx)
+        + 4 + (32 * MAX_APPROVERS) // voters Vec
+        + 8   // start_time
+        + 8   // end_time
+        + 1; // executed: bool
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -119,4 +167,10 @@ pub enum ErrorCode {
 
     #[msg("Unauthorized")]
     Unauthorized,
+
+    #[msg("Member has Already Voted")]
+    AlreadyVoted,
+
+    #[msg("Invalid option index")]
+    InvalidOption,
 }
