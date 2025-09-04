@@ -25,6 +25,8 @@ pub mod dao_contract {
         daoPubkey: Pubkey,
         title: String,
         description: String,
+        program_id: Pubkey,
+        data: Vec<u8>,
         options: Vec<ProposalOption>,
     ) -> Result<()> {
         let proposal = &mut ctx.accounts.proposal;
@@ -40,6 +42,8 @@ pub mod dao_contract {
         proposal.dao = daoPubkey;
         proposal.title = title;
         proposal.description = description;
+        proposal.program_id = program_id;
+        proposal.data = data;
 
         proposal.start_time = timeStamp;
         proposal.end_time = timeStamp + 864000;
@@ -72,6 +76,77 @@ pub mod dao_contract {
 
         proposal.voters.push(voter);
         proposal.options[idx].vote_count = proposal.options[idx].vote_count.saturating_add(1);
+
+        Ok(())
+    }
+
+    pub fn voteCount(ctx: Context<FinalizeProposal>) -> Result<()> {
+        let proposal = &mut ctx.accounts.proposal;
+
+        let now = Clock::get()?.unix_timestamp;
+        require!(now > proposal.end_time, ErrorCode::VotingStillActive);
+
+        require!(!proposal.executed, ErrorCode::AlreadyFinalized);
+
+        // Find the option with the highest votes
+        let mut max_votes: u64 = 0;
+        let mut winner_idx: u8 = 0;
+
+        let names = vec!["Alice", "Bob", "Charlie", "David"];
+
+        for (index, name) in names.iter().enumerate() {
+            println!("Index: {}, Name: {}", index, name);
+        }
+
+        for (i, option) in proposal.options.iter().enumerate() {
+            if option.vote_count > max_votes {
+                max_votes = option.vote_count;
+                winner_idx = i as u8;
+            }
+        }
+
+        proposal.winner_index = Some(winner_idx);
+        proposal.executed = true;
+
+        Ok(())
+    }
+
+    pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
+        let proposal = &mut ctx.accounts.proposal;
+
+        require!(proposal.winner_index.is_some(), ErrorCode::ProposalNotFinalized);
+        require!(!proposal.executed, ErrorCode::AlreadyExecuted);
+
+        // If the winner option is no, then do nothing
+        if proposal.winner_index.unwrap() == 1 {
+            proposal.executed = true;
+            return Ok(());
+        }
+
+        // if the winner option is yes, then mint tokens
+        // Construct the CPI Instruction
+        let ix = solana_program::instruction::Instruction {
+            program_id: proposal.program_id,
+            accounts: vec![
+                AccountMeta::new(ctx.remaining_accounts[0].key(), false), // mint
+                AccountMeta::new(ctx.remaining_accounts[1].key(), false), // authority
+                AccountMeta::new(ctx.remaining_accounts[2].key(), false), // destination
+                AccountMeta::new_readonly(ctx.remaining_accounts[3].key(), false), // destinationOwner
+                AccountMeta::new(ctx.remaining_accounts[4].key(), true), // payer
+                AccountMeta::new_readonly(ctx.remaining_accounts[5].key(), false), // rent
+                AccountMeta::new_readonly(ctx.remaining_accounts[6].key(), false), // systemProgram
+                AccountMeta::new_readonly(ctx.remaining_accounts[7].key(), false), // tokenProgram
+                AccountMeta::new_readonly(ctx.remaining_accounts[8].key(), false), // associatedTokenProgram
+            ],
+            data: proposal.data.clone(),
+        };
+
+        // Perform the CPI (no signer seeds used for simplicity)
+        let account_infos = ctx.remaining_accounts;
+        solana_program::program::invoke(&ix, account_infos)?;
+
+        // Mark transaction as executed
+        proposal.executed = true;
 
         Ok(())
     }
@@ -123,6 +198,22 @@ pub struct Vote<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct FinalizeProposal<'info> {
+    #[account(mut)]
+    pub proposal: Account<'info, Proposal>,
+
+    #[account()]
+    pub daoinfo: Account<'info, DaoInfo>,
+}
+
+#[derive(Accounts)]
+pub struct ExecuteProposal<'info> {
+    #[account(mut)]
+    pub proposal: Account<'info, Proposal>,
+
+    pub daoinfo: Account<'info, DaoInfo>,
+}
 
 #[account]
 pub struct Proposal {
@@ -130,11 +221,14 @@ pub struct Proposal {
     pub proposer: Pubkey,
     pub title: String,
     pub description: String,
+    pub program_id: Pubkey,
+    pub data: Vec<u8>,
     pub options: Vec<ProposalOption>,
     pub voters: Vec<Pubkey>,
     pub start_time: i64,
     pub end_time: i64,
     pub executed: bool,
+    pub winner_index: Option<u8>
 }
 
 impl Proposal {
@@ -142,11 +236,14 @@ impl Proposal {
         + 32                   // proposer: Pubkey
         + 4 + MAX_DATA_LEN     // title: String (4 bytes prefix + bytes)
         + 4 + MAX_DATA_LEN     // description: String
+        + 4                    // Program Id
+        + 100                  // Data Length of instructions
         + 4 + (MAX_APPROVERS * (4 + MAX_DATA_LEN)) // options Vec (approx)
         + 4 + (32 * MAX_APPROVERS) // voters Vec
         + 8   // start_time
         + 8   // end_time
-        + 1; // executed: bool
+        + 1 // executed: bool
+        + 1; // winner_index Option<u8>
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -173,4 +270,16 @@ pub enum ErrorCode {
 
     #[msg("Invalid option index")]
     InvalidOption,
+
+    #[msg("Voting period still active")]
+    VotingStillActive,
+
+    #[msg("Proposal is not finalized")]
+    ProposalNotFinalized,
+
+    #[msg("Proposal already finalized")]
+    AlreadyFinalized,
+
+    #[msg("Voting has already executed")]
+    AlreadyExecuted
 }
