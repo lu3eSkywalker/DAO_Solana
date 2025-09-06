@@ -4,6 +4,7 @@ import { CpiGuardLayout, createAssociatedTokenAccountInstruction, getAccount, ge
 import { DaoContract } from "../target/deploy/DaoContract";
 import { BN } from "bn.js";
 import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
+import { assert } from "chai";
 
 describe("Test", () => {
   // Configure the client to use the local cluster
@@ -17,12 +18,13 @@ describe("Test", () => {
   // Generate a new proposal keypair for the proposal account
   const proposalKeypair = web3.Keypair.generate();
 
-  it("creates a multisig", async () => {
-    const user1PublicKey = new web3.PublicKey("HVw1Z2KFYfKjdL2UThi5RGBvSUpsF4zdsPrucV8TggQm");
+  it("creates a dao", async () => {
+    const user1PublicKey = new web3.PublicKey("5YLbUx2MGaHvSV1de5Kr1dVWPupbf63Mm5a9VhtvqoNt");
     const user2PublicKey = new web3.PublicKey("7eacdg5tZYPPqNdhi9PHvP5TUCEt9RjgUyoJL1a6L8JA");
     const user3PublicKey = new web3.PublicKey("8tbeZfMaQRfqYVCeaL5gnjn7nGMeKezYNe7c6tLwAK5X");
-    const user4PublicKey = new web3.PublicKey("5YLbUx2MGaHvSV1de5Kr1dVWPupbf63Mm5a9VhtvqoNt");
+    const user4PublicKey = new web3.PublicKey("HVw1Z2KFYfKjdL2UThi5RGBvSUpsF4zdsPrucV8TggQm");
 
+    
     const members = [
       program.provider.publicKey,
       user1PublicKey,
@@ -31,7 +33,7 @@ describe("Test", () => {
       user4PublicKey
     ];
 
-    const LAMPORTS_PER_SOL = 1_000_000_000;
+    const LAMPORTS_PER_SOL = 1_000_000_000 * 0.2;
 
     const transferTx = new web3.Transaction().add(
       web3.SystemProgram.transfer({
@@ -81,8 +83,10 @@ describe("Test", () => {
 
     const programId = new web3.PublicKey("9xBdHWanyjR6U84K7p59A2757bXH7Zhjvh3NdbkMbuwb");
 
+    const proposer = program.provider.publicKey;
+
     const txHash = await program.methods
-    .createProposal(daoPubkey, title, description, programId, instructionData, options)
+    .createProposal(daoPubkey, title, description, programId, instructionData, options, proposer)
     .accounts({   
       proposal: proposalKeypair.publicKey,
       proposer: program.provider.publicKey,
@@ -96,5 +100,46 @@ describe("Test", () => {
 
     // Confirm Transaction
     await program.provider.connection.confirmTransaction(txHash);
+    
+    const proposalAccount = await program.account.proposal.fetch(proposalKeypair.publicKey);
+
+    console.log("proposalAccount data: ", proposalAccount);
+
+    assert.equal(proposalAccount.title, "Token Minting");
+    assert.equal(proposalAccount.description, "Should we mint more tokens?");
+    assert.equal(proposalAccount.proposer, program.provider.publicKey.toString());
+    assert.equal(proposalAccount.executed, false);
+  });
+
+  it("user 1 casts a vote to the proposal", async() => {
+
+    const user1PrivateKey = "";
+    const privateKeySeed = bs58.decode(user1PrivateKey);
+
+    const userKeyPair = web3.Keypair.fromSecretKey(privateKeySeed);
+
+    const option_index = 1;
+
+    const txHash = await program.methods
+    .vote(option_index)
+    .accounts({
+      voter: userKeyPair.publicKey,
+      daoinfo: daoAccountKeypair.publicKey,
+      proposal: proposalKeypair.publicKey,
+      systemProgram: web3.SystemProgram.programId
+    })
+    .signers([userKeyPair])
+    .rpc()
+
+    console.log(`Use 'solana confirm -v ${txHash}' to see the logs`);
+
+    // Confirm Transaction
+    await program.provider.connection.confirmTransaction(txHash);
+
+    const proposalAccount = await program.account.proposal.fetch(proposalKeypair.publicKey);
+
+    console.log("proposalAccount voter: ", proposalAccount.voters);
+
+    assert.equal(proposalAccount.voters[0], "5YLbUx2MGaHvSV1de5Kr1dVWPupbf63Mm5a9VhtvqoNt");
   })
 });
