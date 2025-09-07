@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use solana_program::system_instruction;
 
-declare_id!("GeRLoMHnP9YxYG7iSYTp8C55paYcYxE9ioUJSe887XcZ");
+declare_id!("89G9TNmmZNSri7z6apU6vQNj4RJhdqKEpTMppaUz13Nr");
 
 const MAX_DATA_LEN: usize = 100;
 const MAX_APPROVERS: usize = 50;
@@ -28,6 +28,7 @@ pub mod dao_contract {
         program_id: Pubkey,
         data: Vec<u8>,
         options: Vec<ProposalOption>,
+        proposer: Pubkey,
     ) -> Result<()> {
         let proposal = &mut ctx.accounts.proposal;
         let daoinfo = &ctx.accounts.daoinfo;
@@ -46,9 +47,10 @@ pub mod dao_contract {
         proposal.data = data;
 
         proposal.start_time = timeStamp;
-        proposal.end_time = timeStamp + 864000;
+        proposal.end_time = timeStamp + 100;
         proposal.executed = false;
         proposal.options = options;
+        proposal.proposer = proposer;
 
         Ok(())
     }
@@ -80,7 +82,7 @@ pub mod dao_contract {
         Ok(())
     }
 
-    pub fn voteCount(ctx: Context<FinalizeProposal>) -> Result<()> {
+    pub fn vote_count(ctx: Context<FinalizeProposal>) -> Result<()> {
         let proposal = &mut ctx.accounts.proposal;
 
         let now = Clock::get()?.unix_timestamp;
@@ -106,7 +108,6 @@ pub mod dao_contract {
         }
 
         proposal.winner_index = Some(winner_idx);
-        proposal.executed = true;
 
         Ok(())
     }
