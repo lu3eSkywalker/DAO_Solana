@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import * as web3 from "@solana/web3.js";
-import { CpiGuardLayout, createAssociatedTokenAccountInstruction, decodeInitializeTransferFeeConfigInstruction, getAccount, getAssociatedTokenAddress, transfer } from "@solana/spl-token";
+import { AuthorityType, CpiGuardLayout, createAssociatedTokenAccountInstruction, decodeInitializeTransferFeeConfigInstruction, getAccount, getAssociatedTokenAddress, transfer } from "@solana/spl-token";
 import { DaoContract } from "../target/deploy/DaoContract";
 import { BN } from "bn.js";
 import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
@@ -102,8 +102,6 @@ describe("Test", () => {
 
     const proposalAccount = await program.account.proposal.fetch(proposalKeypair.publicKey);
 
-    console.log("proposalAccount data: ", proposalAccount);
-
     assert.equal(proposalAccount.title, "Token Minting");
     assert.equal(proposalAccount.description, "Should we mint more tokens?");
     assert.equal(proposalAccount.proposer, program.provider.publicKey.toString());
@@ -115,7 +113,7 @@ describe("Test", () => {
     const user1PrivateKey = "";
     const privateKeySeed = bs58.decode(user1PrivateKey);
 
-    const userKeyPair = web3.Keypair.fromSecretKey(privateKeySeed);
+    const userKeyPair = web3.Keypair.FromSecretKey(privateKeySeed);
 
     const option_index = 0;
 
@@ -136,8 +134,6 @@ describe("Test", () => {
     await program.provider.connection.confirmTransaction(txHash);
 
     const proposalAccount = await program.account.proposal.fetch(proposalKeypair.publicKey);
-
-    console.log("proposalAccount voter: ", proposalAccount.voters);
 
     assert.equal(proposalAccount.voters[0], "5YLbUx2MGaHvSV1de5Kr1dVWPupbf63Mm5a9VhtvqoNt");
   })
@@ -168,8 +164,6 @@ describe("Test", () => {
     await program.provider.connection.confirmTransaction(txHash);
 
     const proposalAccount = await program.account.proposal.fetch(proposalKeypair.publicKey);
-
-    console.log("proposalAccoupnt voter: ", proposalAccount.voters);
 
     assert.equal(proposalAccount.voters[1], "8tbeZfMaQRfqYVCeaL5gnjn7nGMeKezYNe7c6tLwAK5X");
   });
@@ -211,7 +205,7 @@ describe("Test", () => {
 
     const userKeyPair = web3.Keypair.fromSecretKey(privateKeySeed);
 
-    const option_index = 0;
+    const option_index = 1;
 
     const txHash = await program.methods
       .vote(option_index)
@@ -232,5 +226,89 @@ describe("Test", () => {
     const proposalAccount = await program.account.proposal.fetch(proposalKeypair.publicKey);
 
     assert.equal(proposalAccount.voters[3], "HVw1Z2KFYfKjdL2UThi5RGBvSUpsF4zdsPrucV8TggQm");
+  });
+
+  it('vote count process begins', async () => {
+
+    await new Promise(resolve => setTimeout(resolve, 110_000));
+
+    const txHash = await program.methods
+      .voteCount()
+      .accounts({
+        proposal: proposalKeypair.publicKey,
+        daoinfo: daoAccountKeypair.publicKey
+      })
+      .signers([])
+      .rpc()
+
+    console.log(`Use 'solana confirm -v ${txHash}' to see the logs`);
+
+    // Confirm Transaction
+    await program.provider.connection.confirmTransaction(txHash);
+
+    const proposalAccount = await program.account.proposal.fetch(proposalKeypair.publicKey);
+
+    assert.equal(proposalAccount.winnerIndex, 0);
+  });
+
+  it('executes the dao proposal', async () => {
+
+    const mint = new web3.PublicKey("3smmUP81gPQUWzbi46HhaMFY2gfib6dCpsKz3reuasix");
+    const authority = new web3.PublicKey("3VQX5hbnYQTs68d14H3Tgz3VhBBnQ82UqVUZVKLY1YoE");
+    const userAddress = new web3.PublicKey("5YLbUx2MGaHvSV1de5Kr1dVWPupbf63Mm5a9VhtvqoNt");
+    const destination = await getAssociatedTokenAddress(
+      mint,
+      userAddress
+    );
+
+    const destinationOwner = new web3.PublicKey("5YLbUx2MGaHvSV1de5Kr1dVWPupbf63Mm5a9VhtvqoNt");
+
+    // Check if ATA is initialized or not
+    const ataAccountInfo = await program.provider.connection.getAccountInfo(destination);
+
+    if (ataAccountInfo && ataAccountInfo.data.length > 0) {
+      console.log("ATA is already initialized");
+    } else {
+      console.log("Initlialzing ata")
+
+      // Create associated token account if it doesn't exist
+      const ataIx = createAssociatedTokenAccountInstruction(
+        program.provider.publicKey,
+        destination,
+        userAddress,
+        mint
+      );
+
+      const tx = new web3.Transaction().add(ataIx);
+
+      await program.provider.sendAndConfirm(tx);
+    }
+
+
+    const ix = await program.methods
+      .executeProposal()
+      .accounts({
+        proposal: proposalKeypair.publicKey,
+        daoinfo: daoAccountKeypair.publicKey
+      })
+      .remainingAccounts([
+        { pubkey: mint, isSigner: false, isWritable: true },
+        { pubkey: authority, isSigner: false, isWritable: true },
+        { pubkey: destination, isSigner: false, isWritable: true },
+        { pubkey: destinationOwner, isSigner: false, isWritable: false },
+        { pubkey: program.provider.publicKey, isSigner: true, isWritable: true },
+        { pubkey: web3.SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+        { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: new web3.PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), isSigner: false, isWritable: false },
+        { pubkey: anchor.utils.token.ASSOCIATED_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: new web3.PublicKey("9xBdHWanyjR6U84K7p59A2757bXH7Zhjvh3NdbkMbuwb"), isSigner: false, isWritable: false }
+      ])
+      .instruction();
+
+    const tx = new web3.Transaction().add(ix);
+
+    // Confirm Transaction
+    const txHash = await program.provider.sendAndConfirm(tx, []);
+    await program.provider.connection.confirmTransaction(txHash);
   });
 });
